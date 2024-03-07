@@ -182,7 +182,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
   // won't be able to support AST conditions for those types anyway.
   auto const build_nulls    = cudf::nullate::DYNAMIC{cudf::has_nulls(build)};
   auto const row_hash_build = cudf::experimental::row::hash::row_hasher{preprocessed_build};
-  auto const hash_build     = row_hash_build.device_hasher(build_nulls);
+  auto const hash_build     = row_hash_build.simple_hasher(build_nulls);
   // Since we may see multiple rows that are identical in the equality tables
   // but differ in the conditional tables, the equality comparator used for
   // insertion must account for both sets of tables. An alternative solution
@@ -240,7 +240,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
   device_span<size_type const> matches_per_row_span{};
 
   auto const row_hash   = cudf::experimental::row::hash::row_hasher{preprocessed_probe};
-  auto const hash_probe = row_hash.device_hasher(has_nulls);
+  auto const hash_probe = row_hash.simple_hasher(has_nulls);
 
   if (output_size_data.has_value()) {
     join_size            = output_size_data->first;
@@ -443,7 +443,7 @@ compute_mixed_join_output_size_semi(table_view const& left_equality,
   // won't be able to support AST conditions for those types anyway.
   auto const build_nulls    = cudf::nullate::DYNAMIC{cudf::has_nulls(build)};
   auto const row_hash_build = cudf::experimental::row::hash::row_hasher{preprocessed_build};
-  auto const hash_build     = row_hash_build.device_hasher(build_nulls);
+  auto const hash_build     = row_hash_build.simple_hasher(build_nulls);
   // Since we may see multiple rows that are identical in the equality tables
   // but differ in the conditional tables, the equality comparator used for
   // insertion must account for both sets of tables. An alternative solution
@@ -495,7 +495,7 @@ compute_mixed_join_output_size_semi(table_view const& left_equality,
   rmm::device_scalar<std::size_t> size(0, stream, mr);
 
   auto const row_hash   = cudf::experimental::row::hash::row_hasher{preprocessed_probe};
-  auto const hash_probe = row_hash.device_hasher(has_nulls);
+  auto const hash_probe = row_hash.simple_hasher(has_nulls);
 
   // Determine number of output rows without actually building the output to simply
   // find what the size of the output will be.

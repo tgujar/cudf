@@ -1961,6 +1961,42 @@ class device_row_hasher {
   uint32_t const _seed;
 };
 
+
+/**
+ * @brief Computes the hash value of a row in the given table.
+ *
+ * @tparam hash_function Hash functor to use for hashing elements.
+ * @tparam Nullate A cudf::nullate type describing whether to check for nulls.
+ */
+template <template <typename> class hash_function, typename Nullate>
+class simple_row_hasher {
+  friend class row_hasher;  ///< Allow row_hasher to access private members.
+
+ public:
+  /**
+   * @brief Return the hash value of a row in the given table.
+   *
+   * @param row_index The row index to compute the hash value of
+   * @return The hash value of the row
+   */
+  __device__ auto operator()(size_type row_index) const noexcept
+  {
+    return (uint32_t) row_index;
+  }
+
+  CUDF_HOST_DEVICE simple_row_hasher(Nullate check_nulls,
+                                     table_device_view t,
+                                     uint32_t seed = DEFAULT_HASH_SEED) noexcept
+    : _check_nulls{check_nulls}, _table{t}, _seed(seed)
+  {
+  }
+
+private:
+  Nullate const _check_nulls;
+  table_device_view const _table;
+  uint32_t const _seed;
+};
+
 // Inject row::equality::preprocessed_table into the row::hash namespace
 // As a result, row::equality::preprocessed_table and row::hash::preprocessed table are the same
 // type and are interchangeable.
@@ -2012,6 +2048,16 @@ class row_hasher {
             class DeviceRowHasher = device_row_hasher,
             typename Nullate>
   DeviceRowHasher<hash_function, Nullate> device_hasher(Nullate nullate = {},
+                                                        uint32_t seed   = DEFAULT_HASH_SEED) const
+  {
+    return DeviceRowHasher<hash_function, Nullate>(nullate, *d_t, seed);
+  }
+
+  template <template <typename> class hash_function = cudf::hashing::detail::default_hash,
+            template <template <typename> class, typename>
+            class DeviceRowHasher = simple_row_hasher,
+            typename Nullate>
+  DeviceRowHasher<hash_function, Nullate> simple_hasher(Nullate nullate = {},
                                                         uint32_t seed   = DEFAULT_HASH_SEED) const
   {
     return DeviceRowHasher<hash_function, Nullate>(nullate, *d_t, seed);

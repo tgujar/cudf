@@ -170,7 +170,7 @@ mixed_join(
   auto const preprocessed_probe =
     experimental::row::equality::preprocessed_table::create(probe, stream);
   auto const row_hash   = cudf::experimental::row::hash::row_hasher{preprocessed_probe};
-  auto const hash_probe = row_hash.device_hasher(has_nulls);
+  auto const hash_probe = row_hash.simple_hasher(has_nulls);
   auto const row_comparator =
     cudf::experimental::row::equality::two_table_comparator{preprocessed_probe, preprocessed_build};
   auto const equality_probe = row_comparator.equal_to<false>(has_nulls, compare_nulls);
@@ -429,7 +429,7 @@ compute_mixed_join_output_size(table_view const& left_equality,
   auto const preprocessed_probe =
     experimental::row::equality::preprocessed_table::create(probe, stream);
   auto const row_hash   = cudf::experimental::row::hash::row_hasher{preprocessed_probe};
-  auto const hash_probe = row_hash.device_hasher(has_nulls);
+  auto const hash_probe = row_hash.simple_hasher(has_nulls);
   auto const row_comparator =
     cudf::experimental::row::equality::two_table_comparator{preprocessed_probe, preprocessed_build};
   auto const equality_probe = row_comparator.equal_to<false>(has_nulls, compare_nulls);
