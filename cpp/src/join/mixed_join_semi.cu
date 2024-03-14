@@ -192,26 +192,30 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
   // the columns of the conditional table that are used by the expression, but
   // that requires additional plumbing through the AST machinery and is out of
   // scope for now.
-  auto const row_comparator_build =
-    cudf::experimental::row::equality::two_table_comparator{preprocessed_build, preprocessed_build};
-  auto const equality_build_equality =
-    row_comparator_build.equal_to<false>(build_nulls, compare_nulls);
-  auto const preprocessed_build_condtional =
-    experimental::row::equality::preprocessed_table::create(
-      swap_tables ? left_conditional : right_conditional, stream);
-  auto const row_comparator_conditional_build =
-    cudf::experimental::row::equality::two_table_comparator{preprocessed_build_condtional,
-                                                            preprocessed_build_condtional};
-  auto const equality_build_conditional =
-    row_comparator_conditional_build.equal_to<false>(build_nulls, compare_nulls);
-  double_row_equality equality_build{equality_build_equality, equality_build_conditional};
+  // auto const row_comparator_build =
+  //   cudf::experimental::row::equality::two_table_comparator{preprocessed_build, preprocessed_build};
+  // auto const equality_build_equality =
+  //   row_comparator_build.equal_to<false>(build_nulls, compare_nulls);
+  // auto const preprocessed_build_condtional =
+  //   experimental::row::equality::preprocessed_table::create(
+  //     swap_tables ? left_conditional : right_conditional, stream);
+  // auto const row_comparator_conditional_build =
+  //   cudf::experimental::row::equality::two_table_comparator{preprocessed_build_condtional,
+  //                                                           preprocessed_build_condtional};
+  // auto const equality_build_conditional =
+  //   row_comparator_conditional_build.equal_to<false>(build_nulls, compare_nulls);
+  
+  auto const row_comparator_build = cudf::experimental::row::equality::simple_row_comparator{preprocessed_build, preprocessed_build};
+  // auto const row_comparator_conditional = cudf::experimental::row::equality::simple_row_comparator{preprocessed_build_condtional, preprocessed_build_condtional};
+
+  // double_row_equality equality_build{row_comparator_build, row_comparator_conditional};
   make_pair_function_semi pair_func_build{};
 
   auto iter = cudf::detail::make_counting_transform_iterator(0, pair_func_build);
 
   // skip rows that are null here.
   if ((compare_nulls == null_equality::EQUAL) or (not nullable(build))) {
-    hash_table.insert(iter, iter + right_num_rows, hash_build, equality_build, stream.value());
+    hash_table.insert(iter, iter + right_num_rows, hash_build, row_comparator_build, stream.value());
   } else {
     thrust::counting_iterator<cudf::size_type> stencil(0);
     auto const [row_bitmask, _] =
@@ -220,7 +224,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
 
     // insert valid rows
     hash_table.insert_if(
-      iter, iter + right_num_rows, stencil, pred, hash_build, equality_build, stream.value());
+      iter, iter + right_num_rows, stencil, pred, hash_build, row_comparator_build, stream.value());
   }
 
   auto hash_table_view = hash_table.get_device_view();

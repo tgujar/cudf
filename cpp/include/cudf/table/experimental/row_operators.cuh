@@ -1574,6 +1574,7 @@ struct preprocessed_table {
   friend class self_comparator;       ///< Allow self_comparator to access private members
   friend class two_table_comparator;  ///< Allow two_table_comparator to access private members
   friend class hash::row_hasher;      ///< Allow row_hasher to access private members
+  friend class simple_row_comparator;
 
   using table_device_view_owner =
     std::invoke_result_t<decltype(table_device_view::create), table_view, rmm::cuda_stream_view>;
@@ -1690,6 +1691,35 @@ struct strong_index_comparator_adapter {
   Comparator const comparator;
 };
 // @endcond
+
+
+class simple_row_comparator {
+ public:
+  /**
+   * @brief Checks whether the row at `lhs_index` in the `lhs` table is equal to the row at
+   * `rhs_index` in the `rhs` table.
+   *
+   * @param lhs_index The index of the row in the `lhs` table to examine
+   * @param rhs_index The index of the row in the `rhs` table to examine
+   * @return `true` if row from the `lhs` table is equal to the row in the `rhs` table
+   */
+  __device__ bool operator()(const cudf::hash_value_type lhs_index,
+                                       const cudf::hash_value_type rhs_index) const noexcept
+  {
+    return thrust::equal(thrust::seq, lhs.begin(), lhs.end(), rhs.begin(), [&](column_device_view l, column_device_view r){return l.element<int32_t>(lhs_index) == r.element<int32_t>(rhs_index);});
+  }
+
+  simple_row_comparator(std::shared_ptr<preprocessed_table> lhs,
+                        std::shared_ptr<preprocessed_table> rhs)
+    : lhs{*lhs},
+      rhs{*rhs}
+  {
+  }
+  
+  private:
+    table_device_view const lhs;
+    table_device_view const rhs;
+};
 
 /**
  * @brief An owning object that can be used to equality compare rows of two different tables.
