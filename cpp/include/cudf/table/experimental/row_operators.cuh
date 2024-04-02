@@ -1855,7 +1855,7 @@ class element_hasher {
  * @tparam hash_function Hash functor to use for hashing elements.
  * @tparam Nullate A cudf::nullate type describing whether to check for nulls.
  */
-template <template <typename> class hash_function, typename Nullate>
+template <bool has_nested_columns, template <typename> class hash_function, typename Nullate>
 class device_row_hasher {
   friend class row_hasher;  ///< Allow row_hasher to access private members.
 
@@ -1901,14 +1901,14 @@ class device_row_hasher {
     {
     }
 
-    template <typename T, CUDF_ENABLE_IF(not cudf::is_nested<T>())>
+    template <typename T, CUDF_ENABLE_IF(not has_nested_columns or not cudf::is_nested<T>())>
     __device__ hash_value_type operator()(column_device_view const& col,
                                           size_type row_index) const noexcept
     {
       return _element_hasher.template operator()<T>(col, row_index);
     }
 
-    template <typename T, CUDF_ENABLE_IF(cudf::is_nested<T>())>
+    template <typename T, CUDF_ENABLE_IF(has_nested_columns and cudf::is_nested<T>())>
     __device__ hash_value_type operator()(column_device_view const& col,
                                           size_type row_index) const noexcept
     {
@@ -2007,14 +2007,15 @@ class row_hasher {
    * @param seed The seed to use for the hash function
    * @return A hash operator to use on the device
    */
-  template <template <typename> class hash_function = cudf::hashing::detail::default_hash,
-            template <template <typename> class, typename>
+  template <bool has_nested_columns                 = true,
+            template <typename> class hash_function = cudf::hashing::detail::default_hash,
+            template <bool, template <typename> class, typename>
             class DeviceRowHasher = device_row_hasher,
             typename Nullate>
-  DeviceRowHasher<hash_function, Nullate> device_hasher(Nullate nullate = {},
-                                                        uint32_t seed   = DEFAULT_HASH_SEED) const
+  DeviceRowHasher<has_nested_columns, hash_function, Nullate> device_hasher(
+    Nullate nullate = {}, uint32_t seed = DEFAULT_HASH_SEED) const
   {
-    return DeviceRowHasher<hash_function, Nullate>(nullate, *d_t, seed);
+    return DeviceRowHasher<has_nested_columns, hash_function, Nullate>(nullate, *d_t, seed);
   }
 
  private:

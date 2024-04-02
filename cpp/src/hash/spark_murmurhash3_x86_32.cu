@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023, NVIDIA CORPORATION.
+ * Copyright (c) 2022-2024, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -272,7 +272,7 @@ spark_hash_value_type __device__ inline Spark_MurmurHash3_x86_32<numeric::decima
  * @tparam hash_function Hash functor to use for hashing elements. Must be Spark_MurmurHash3_x86_32.
  * @tparam Nullate A cudf::nullate type describing whether to check for nulls.
  */
-template <template <typename> class hash_function, typename Nullate>
+template <bool has_nested_columns, template <typename> class hash_function, typename Nullate>
 class spark_murmur_device_row_hasher {
   friend class cudf::experimental::row::hash::row_hasher;  ///< Allow row_hasher to access private
                                                            ///< members.
@@ -317,7 +317,7 @@ class spark_murmur_device_row_hasher {
 
     using hash_functor = cudf::experimental::row::hash::element_hasher<hash_fn, Nullate>;
 
-    template <typename T, CUDF_ENABLE_IF(not cudf::is_nested<T>())>
+    template <typename T, CUDF_ENABLE_IF(not has_nested_columns or not cudf::is_nested<T>())>
     __device__ spark_hash_value_type operator()(column_device_view const& col,
                                                 size_type row_index) const noexcept
     {
@@ -325,7 +325,7 @@ class spark_murmur_device_row_hasher {
       return hasher.template operator()<T>(col, row_index);
     }
 
-    template <typename T, CUDF_ENABLE_IF(cudf::is_nested<T>())>
+    template <typename T, CUDF_ENABLE_IF(has_nested_columns and cudf::is_nested<T>())>
     __device__ spark_hash_value_type operator()(column_device_view const& col,
                                                 size_type row_index) const noexcept
     {
@@ -421,8 +421,8 @@ std::unique_ptr<column> spark_murmurhash3_x86_32(table_view const& input,
     rmm::exec_policy(stream),
     output_view.begin<spark_hash_value_type>(),
     output_view.end<spark_hash_value_type>(),
-    row_hasher.device_hasher<Spark_MurmurHash3_x86_32, spark_murmur_device_row_hasher>(nullable,
-                                                                                       seed));
+    row_hasher.device_hasher<true, Spark_MurmurHash3_x86_32, spark_murmur_device_row_hasher>(
+      nullable, seed));
 
   return output;
 }

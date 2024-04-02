@@ -29,9 +29,8 @@
 namespace cudf {
 namespace detail {
 
-using row_hash =
-  cudf::experimental::row::hash::device_row_hasher<cudf::hashing::detail::default_hash,
-                                                   cudf::nullate::DYNAMIC>;
+using row_hash = cudf::experimental::row::hash::
+  device_row_hasher<false, cudf::hashing::detail::default_hash, cudf::nullate::DYNAMIC>;
 
 // // This alias is used by mixed_joins, which support only non-nested types
 using row_equality = cudf::experimental::row::equality::strong_index_comparator_adapter<

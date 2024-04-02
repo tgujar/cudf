@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2023, NVIDIA CORPORATION.
+ * Copyright (c) 2019-2024, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ std::unique_ptr<column> murmurhash3_x86_32(table_view const& input,
   thrust::tabulate(rmm::exec_policy(stream),
                    output_view.begin<hash_value_type>(),
                    output_view.end<hash_value_type>(),
-                   row_hasher.device_hasher<MurmurHash3_x86_32>(nullable, seed));
+                   row_hasher.device_hasher<true, MurmurHash3_x86_32>(nullable, seed));
 
   return output;
 }
