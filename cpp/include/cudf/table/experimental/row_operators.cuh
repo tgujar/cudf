@@ -464,7 +464,7 @@ class device_row_comparator {
         ++depth;
       }
 
-      return cudf::type_dispatcher<dispatch_void_if_nested>(
+      return cudf::type_dispatcher<dispatch_void_if_nested, has_nested_columns>(
         lcol.type(),
         element_comparator{_check_nulls, lcol, rcol, _null_precedence, depth, _comparator},
         lhs_element_index,
@@ -566,9 +566,10 @@ class device_row_comparator {
 
         // finally, compare leaf to leaf
         weak_ordering state{weak_ordering::EQUIVALENT};
-        int last_null_depth                    = _depth;
-        cuda::std::tie(state, last_null_depth) = cudf::type_dispatcher<dispatch_void_if_nested>(
-          lcol.type(), comparator, element_index, element_index);
+        int last_null_depth = _depth;
+        cuda::std::tie(state, last_null_depth) =
+          cudf::type_dispatcher<dispatch_void_if_nested, has_nested_columns>(
+            lcol.type(), comparator, element_index, element_index);
         if (state != weak_ordering::EQUIVALENT) { return cuda::std::pair(state, _depth); }
         ++element_index;
       }
@@ -641,7 +642,8 @@ class device_row_comparator {
 
       weak_ordering state;
       cuda::std::tie(state, last_null_depth) =
-        cudf::type_dispatcher(_lhs.column(i).type(), element_comp, lhs_index, rhs_index);
+        cudf::type_dispatcher<id_to_type_impl, has_nested_columns>(
+          _lhs.column(i).type(), element_comp, lhs_index, rhs_index);
 
       if (state == weak_ordering::EQUIVALENT) { continue; }
 
@@ -1353,7 +1355,7 @@ class device_row_comparator {
                                        size_type const rhs_index) const noexcept
   {
     auto equal_elements = [=](column_device_view l, column_device_view r) {
-      return cudf::type_dispatcher(
+      return cudf::type_dispatcher<id_to_type_impl, has_nested_columns>(
         l.type(),
         element_comparator{check_nulls, l, r, nulls_are_equal, comparator},
         lhs_index,
@@ -1498,7 +1500,7 @@ class device_row_comparator {
 
       auto comp = column_comparator{
         element_comparator{check_nulls, lcol, rcol, nulls_are_equal, comparator}, lcol.size()};
-      return type_dispatcher<dispatch_void_if_nested>(lcol.type(), comp);
+      return type_dispatcher<dispatch_void_if_nested, has_nested_columns>(lcol.type(), comp);
     }
 
    private:
@@ -1869,7 +1871,7 @@ class device_row_hasher {
   __device__ auto operator()(size_type row_index) const noexcept
   {
     auto it = thrust::make_transform_iterator(_table.begin(), [=](auto const& column) {
-      return cudf::type_dispatcher<dispatch_storage_type>(
+      return cudf::type_dispatcher<dispatch_storage_type, has_nested_columns>(
         column.type(),
         element_hasher_adapter<hash_function>{_check_nulls, _seed},
         column,
@@ -1940,7 +1942,8 @@ class device_row_hasher {
       for (int i = 0; i < curr_col.size(); ++i) {
         hash = cudf::hashing::detail::hash_combine(
           hash,
-          type_dispatcher<dispatch_void_if_nested>(curr_col.type(), _element_hasher, curr_col, i));
+          type_dispatcher<dispatch_void_if_nested, has_nested_columns>(
+            curr_col.type(), _element_hasher, curr_col, i));
       }
       return hash;
     }

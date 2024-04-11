@@ -638,7 +638,7 @@ struct column_to_strings_fn {
                                                             ? children_names[child_index].children
                                                             : std::vector<column_name_info>{});
       } else {
-        return cudf::type_dispatcher<cudf::id_to_type_impl, column_to_strings_fn const&>(
+        return cudf::type_dispatcher<cudf::id_to_type_impl, true, column_to_strings_fn const&>(
           child_view.type(), *this, child_view);
       }
     };
@@ -713,7 +713,7 @@ struct column_to_strings_fn {
                                                               ? children_names[i].children
                                                               : std::vector<column_name_info>{});
         } else {
-          return cudf::type_dispatcher<cudf::id_to_type_impl, column_to_strings_fn const&>(
+          return cudf::type_dispatcher<cudf::id_to_type_impl, true, column_to_strings_fn const&>(
             current_col.type(), *this, current_col);
         }
       });

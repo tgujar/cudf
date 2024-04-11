@@ -462,7 +462,7 @@ void write_csv(data_sink* out_sink,
         sub_view.end(),
         std::back_inserter(str_column_vec),
         [&converter = std::as_const(converter)](auto const& current_col) {
-          return cudf::type_dispatcher<cudf::id_to_type_impl, column_to_strings_fn const&>(
+          return cudf::type_dispatcher<cudf::id_to_type_impl, true, column_to_strings_fn const&>(
             current_col.type(), converter, current_col);
         });
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2023, NVIDIA CORPORATION.
+ * Copyright (c) 2019-2024, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -451,6 +451,7 @@ using scalar_device_type_t = typename type_to_scalar_type_impl<T>::ScalarDeviceT
 #pragma nv_exec_check_disable
 #endif
 template <template <cudf::type_id> typename IdTypeMap = id_to_type_impl,
+          bool has_nested_columns                     = true,
           typename Functor,
           typename... Ts>
 CUDF_HOST_DEVICE __forceinline__ constexpr decltype(auto) type_dispatcher(cudf::data_type dtype,
@@ -521,15 +522,6 @@ CUDF_HOST_DEVICE __forceinline__ constexpr decltype(auto) type_dispatcher(cudf::
     case type_id::DURATION_NANOSECONDS:
       return f.template operator()<typename IdTypeMap<type_id::DURATION_NANOSECONDS>::type>(
         std::forward<Ts>(args)...);
-    case type_id::DICTIONARY32:
-      return f.template operator()<typename IdTypeMap<type_id::DICTIONARY32>::type>(
-        std::forward<Ts>(args)...);
-    case type_id::STRING:
-      return f.template operator()<typename IdTypeMap<type_id::STRING>::type>(
-        std::forward<Ts>(args)...);
-    case type_id::LIST:
-      return f.template operator()<typename IdTypeMap<type_id::LIST>::type>(
-        std::forward<Ts>(args)...);
     case type_id::DECIMAL32:
       return f.template operator()<typename IdTypeMap<type_id::DECIMAL32>::type>(
         std::forward<Ts>(args)...);
@@ -539,16 +531,40 @@ CUDF_HOST_DEVICE __forceinline__ constexpr decltype(auto) type_dispatcher(cudf::
     case type_id::DECIMAL128:
       return f.template operator()<typename IdTypeMap<type_id::DECIMAL128>::type>(
         std::forward<Ts>(args)...);
-    case type_id::STRUCT:
-      return f.template operator()<typename IdTypeMap<type_id::STRUCT>::type>(
+    case type_id::DICTIONARY32:
+      return f.template operator()<typename IdTypeMap<type_id::DICTIONARY32>::type>(
         std::forward<Ts>(args)...);
-    default: {
+    case type_id::STRING:
+      return f.template operator()<typename IdTypeMap<type_id::STRING>::type>(
+        std::forward<Ts>(args)...);
+    default:
+      if constexpr (!has_nested_columns) {
 #ifndef __CUDA_ARCH__
-      CUDF_FAIL("Invalid type_id.");
+        CUDF_FAIL("Invalid type_id.");
 #else
-      CUDF_UNREACHABLE("Invalid type_id.");
+        CUDF_UNREACHABLE("Invalid type_id.");
 #endif
-    }
+      } else {
+        break;
+      }
+  };
+
+  if constexpr (has_nested_columns) {
+    switch (dtype.id()) {
+      case type_id::LIST:
+        return f.template operator()<typename IdTypeMap<type_id::LIST>::type>(
+          std::forward<Ts>(args)...);
+      case type_id::STRUCT:
+        return f.template operator()<typename IdTypeMap<type_id::STRUCT>::type>(
+          std::forward<Ts>(args)...);
+      default: {
+#ifndef __CUDA_ARCH__
+        CUDF_FAIL("Invalid type_id.");
+#else
+        CUDF_UNREACHABLE("Invalid type_id.");
+#endif
+      }
+    };
   }
 }
 
