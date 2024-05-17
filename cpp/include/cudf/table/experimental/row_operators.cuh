@@ -63,22 +63,26 @@ namespace experimental {
 template <typename T>
 using type_identity = T;
 
-template <typename T, template <typename U> typename... c_rest>
-struct nested_conditional_t;
+/// Type identity helper
+template <typename T, template <typename> typename... REST>
+struct nested_conditional;
+
+/**
+ * @brief Nested type dispatcher helper
+ */
+template <typename T, template <typename> typename FIRST, template <typename> typename... REST>
+struct nested_conditional<T, FIRST, REST...> {
+  /// The underlying type
+  using type = typename nested_conditional<FIRST<T>, REST...>::type;
+};
 
 template <typename T>
-struct nested_conditional_t<T> {
-  using type = type_identity<T>;
+struct nested_conditional<T> {
+  using type = T;  ///< The underlying type
 };
 
-template <typename T,
-          template <typename U>
-          typename c_first,
-          template <typename V>
-          typename... c_rest>
-struct nested_condtional_t {
-  using type = c_first<typename nested_conditional_t<T, c_rest...>::type>;
-};
+template <typename T, template <typename> typename... REST>
+using nested_conditional_t = typename nested_conditional<T, REST...>::type;
 
 template <bool B, typename T>
 using dispatch_void_conditional_t = std::conditional_t<B, void, T>;
@@ -89,6 +93,14 @@ struct dispatch_void_conditional_generator {
   using type = dispatch_void_conditional_t<std::disjunction<std::is_same<T, Types>...>::value, T>;
 };
 
+/**
+ * @brief Returns `void` if it's a nested type
+ */
+template <typename T>
+using dispatch_void_if_nested_t =
+  dispatch_void_conditional_t<std::is_same_v<id_to_type<type_id::STRUCT>, T> or
+                                std::is_same_v<id_to_type<type_id::LIST>, T>,
+                              T>;
 /**
  * @brief A map from cudf::type_id to cudf type that excludes LIST and STRUCT types.
  *
@@ -1898,16 +1910,13 @@ template <template <typename> class hash_function,
           typename dispatch_conditional_t>
 class device_row_hasher {
   friend class row_hasher;  ///< Allow row_hasher to access private members.
-  template <cudf::type_id t>
-  struct dispatch_storage_type {
-    using type = nested_conditional_t<id_to_type<t>, device_storage_type_t, dispatch_conditional_t>;
-  };
+  template <cudf::type_id T>
+  using dispatch_storage_type =
+    nested_conditional<id_to_type<T>, dispatch_conditional_t, device_storage_type_t>;
 
-  template <cudf::type_id t>
-  struct dispatch_void_if_nested {
-    using type =
-      nested_conditional_t<id_to_type<t>, dispatch_void_if_nested_t, dispatch_conditional_t>;
-  };
+  template <cudf::type_id T>
+  using dispatch_void_if_nested =
+    nested_conditional<id_to_type<T>, dispatch_conditional_t, dispatch_void_if_nested_t>;
 
  public:
   /**
