@@ -58,6 +58,66 @@ namespace CUDF_EXPORT cudf {
 
 namespace experimental {
 
+/// Type identity type from C++20
+template <typename T>
+using type_identity_t = T;
+
+/**
+ * @brief Recursive template to recursively apply conditional types
+ *
+ * @tparam T Base type
+ * @tparam Rest Chained conditional_t to apply
+ */
+template <typename T, template <typename> typename... Rest>
+struct nested_conditional;
+
+/**
+ * @brief Primary template
+ */
+template <typename T, template <typename> typename First, template <typename> typename... Rest>
+struct nested_conditional<T, First, Rest...> {
+  /// The type to dispatch to if the type is nested
+  using type = typename nested_conditional<First<T>, Rest...>::type;
+};
+
+/**
+ * @brief Base case specialization
+ */
+template <typename T>
+struct nested_conditional<T> {
+  using type = T;  ///< The underlying type
+};
+
+/**
+ * @brief Helper alias for nested_conditional
+ */
+template <typename T, template <typename> typename... Rest>
+using nested_conditional_t = typename nested_conditional<T, Rest...>::type;
+
+/**
+ * @brief Void dispatcher helper
+ */
+template <bool B, typename T>
+using dispatch_void_conditional_t = std::conditional_t<B, void, T>;
+
+/**
+ * @brief Void dispatcher generator
+ */
+template <typename... Types>
+struct dispatch_void_conditional_generator {
+  /// The underlying type
+  template <typename T>
+  using type = dispatch_void_conditional_t<std::disjunction<std::is_same<T, Types>...>::value, T>;
+};
+
+/**
+ * @brief Returns `void` if it's a nested type
+ */
+template <typename T>
+using dispatch_void_if_nested_t =
+  dispatch_void_conditional_t<std::is_same_v<id_to_type<type_id::STRUCT>, T> or
+                                std::is_same_v<id_to_type<type_id::LIST>, T>,
+                              T>;
 /**
  * @brief A map from cudf::type_id to cudf type that excludes LIST and STRUCT types.
  *
