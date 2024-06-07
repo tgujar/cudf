@@ -2264,11 +2264,12 @@ class row_hasher {
    * @return A hash operator to use on the device
    */
   template <template <typename> class hash_function = cudf::hashing::detail::default_hash,
-            template <template <typename> class, typename>
+            template <template <typename> class, typename, template <typename> typename>
             class DeviceRowHasher = device_row_hasher,
-            typename Nullate>
-  DeviceRowHasher<hash_function, Nullate> device_hasher(Nullate nullate = {},
-                                                        uint32_t seed   = DEFAULT_HASH_SEED) const
+            typename Nullate,
+            template <typename> typename dispatch_cond = type_identity_t>
+  DeviceRowHasher<hash_function, Nullate, dispatch_cond> device_hasher(
+    Nullate nullate = {}, uint32_t seed = DEFAULT_HASH_SEED) const
   {
     return DeviceRowHasher<hash_function, Nullate>(nullate, *d_t, seed);
   }
