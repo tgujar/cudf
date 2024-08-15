@@ -29,6 +29,8 @@
 #include <cudf/structs/structs_column_device_view.cuh>
 #include <cudf/table/row_operators.cuh>
 #include <cudf/table/table_device_view.cuh>
+#include <cudf/table/table_view.hpp>
+#include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
@@ -145,20 +147,13 @@ using dispatch_void_if_compound_t =
  * type_dispatcher<dispatch_nested_to_void>(data_type(), functor{});
  * @endcode
  */
-template <typename T>
-using dispatch_void_if_nested_t =
-  dispatch_void_conditional_t<std::is_same_v<cudf::struct_view, T> or
-                                std::is_same_v<cudf::list_view, T>,
-                              T>;
-
 template <cudf::type_id t>
 struct dispatch_void_if_nested {
-  /// The type to dispatch to if the type is nested
-  using type = std::conditional_t<t == type_id::STRUCT or t == type_id::LIST, void, id_to_type<t>>;
+  /// The underlying type
+  using type = dispatch_void_if_nested_t<id_to_type<t>>;
 };
 
 namespace row {
-
 enum class lhs_index_type : size_type {};
 enum class rhs_index_type : size_type {};
 
@@ -1413,7 +1408,8 @@ struct nan_equal_physical_equality_comparator {
  */
 template <bool has_nested_columns,
           typename Nullate,
-          typename PhysicalEqualityComparator = nan_equal_physical_equality_comparator>
+          typename PhysicalEqualityComparator = nan_equal_physical_equality_comparator,
+          template <typename> typename dispatch_conditional_t = cudf::experimental::type_identity_t>
 class device_row_comparator {
   friend class self_comparator;       ///< Allow self_comparator to access private members
   friend class two_table_comparator;  ///< Allow two_table_comparator to access private members
@@ -1763,13 +1759,17 @@ class self_comparator {
    * @return A binary callable object
    */
   template <bool has_nested_columns,
+            template <typename> typename dispatch_conditional_t = type_identity_t,
             typename Nullate,
             typename PhysicalEqualityComparator = nan_equal_physical_equality_comparator>
   auto equal_to(Nullate nullate                       = {},
                 null_equality nulls_are_equal         = null_equality::EQUAL,
                 PhysicalEqualityComparator comparator = {}) const noexcept
   {
-    return device_row_comparator<has_nested_columns, Nullate, PhysicalEqualityComparator>{
+    return device_row_comparator<has_nested_columns,
+                                 Nullate,
+                                 PhysicalEqualityComparator,
+                                 dispatch_conditional_t>{
       nullate, *d_t, *d_t, nulls_are_equal, comparator};
   }
 
@@ -1940,15 +1940,18 @@ class two_table_comparator {
    * @return A binary callable object
    */
   template <bool has_nested_columns,
+            template <typename> typename dispatch_conditional_t = type_identity_t,
             typename Nullate,
             typename PhysicalEqualityComparator = nan_equal_physical_equality_comparator>
   auto equal_to(Nullate nullate                       = {},
                 null_equality nulls_are_equal         = null_equality::EQUAL,
                 PhysicalEqualityComparator comparator = {}) const noexcept
   {
-    return strong_index_comparator_adapter{
-      device_row_comparator<has_nested_columns, Nullate, PhysicalEqualityComparator>(
-        nullate, *d_left_table, *d_right_table, nulls_are_equal, comparator)};
+    return strong_index_comparator_adapter{device_row_comparator<has_nested_columns,
+                                                                 Nullate,
+                                                                 PhysicalEqualityComparator,
+                                                                 dispatch_conditional_t>(
+      nullate, *d_left_table, *d_right_table, nulls_are_equal, comparator)};
   }
 
   /**
@@ -2100,12 +2103,15 @@ class element_hasher {
  * @tparam hash_function Hash functor to use for hashing elements.
  * @tparam Nullate A cudf::nullate type describing whether to check for nulls.
  */
-template <template <typename> class hash_function, typename Nullate>
+template <template <typename> class hash_function,
+          typename Nullate,
+          template <typename> typename dispatch_conditional_t = cudf::experimental::type_identity_t>
 class device_row_hasher {
   friend class row_hasher;  ///< Allow row_hasher to access private members.
   template <cudf::type_id T>
   using dispatch_storage_type =
     transform_sequence<id_to_type<T>, dispatch_conditional_t, device_storage_type_t>;
+
   template <cudf::type_id T>
   using dispatch_void_if_nested =
     transform_sequence<id_to_type<T>, dispatch_conditional_t, dispatch_void_if_nested_t>;
@@ -2281,7 +2287,7 @@ class row_hasher {
   DeviceRowHasher<hash_function, Nullate, dispatch_cond> device_hasher(
     Nullate nullate = {}, uint32_t seed = DEFAULT_HASH_SEED) const
   {
-    return DeviceRowHasher<hash_function, Nullate>(nullate, *d_t, seed);
+    return DeviceRowHasher<hash_function, Nullate, dispatch_cond>(nullate, *d_t, seed);
   }
 
   /**
