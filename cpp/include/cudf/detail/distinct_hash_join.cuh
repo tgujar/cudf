@@ -111,7 +111,7 @@ struct distinct_hash_join {
   /// Hash table type
   template <typename Comparator>
   using static_set_with_comparator = cuco::static_set<
-    cuco::pair<hash_value_type, rhs_index_type>,
+    cuco::pair<hash_value_type, lhs_index_type>,
     cuco::extent<size_type>,
     cuda::thread_scope_device,
     comparator_adapter<
