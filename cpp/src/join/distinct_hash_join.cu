@@ -55,7 +55,7 @@ auto prepare_device_equal(
   std::unordered_set<cudf::type_id> const& column_types)
 {
   auto const two_table_equal =
-    cudf::experimental::row::equality::two_table_comparator(build, probe);
+    cudf::experimental::row::equality::two_table_comparator(probe, build);
   auto d_comparator =
     two_table_equal.equal_to(column_types, nullate::DYNAMIC{has_nulls}, compare_nulls);
 
@@ -111,7 +111,7 @@ class build_keys_fn {
 
 /**
  * @brief Device output transform functor to construct `size_type` with
- * `cuco::pair<hash_value_type, lhs_index_type>` or `cuco::pair<hash_value_type, lhs_index_type>`
+ * `cuco::pair<hash_value_type, lhs_index_type>` or `cuco::pair<hash_value_type, rhs_index_type>`
  */
 struct output_fn {
   __device__ constexpr cudf::size_type operator()(
@@ -153,7 +153,7 @@ distinct_hash_join<HasNested>::distinct_hash_join(cudf::table_view const& build,
   std::visit(
     [&](auto&& comparator_adapter) {
       using static_set_type =
-        cuco::static_set<cuco::pair<hash_value_type, lhs_index_type>,
+        cuco::static_set<cuco::pair<hash_value_type, rhs_index_type>,
                          cuco::extent<size_type>,
                          cuda::thread_scope_device,
                          typename std::remove_reference_t<decltype(comparator_adapter)>,
@@ -166,7 +166,7 @@ distinct_hash_join<HasNested>::distinct_hash_join(cudf::table_view const& build,
         build.num_rows(),
         CUCO_DESIRED_LOAD_FACTOR,
         cuco::empty_key{
-          cuco::pair{std::numeric_limits<hash_value_type>::max(), lhs_index_type{JoinNoneValue}}},
+          cuco::pair{std::numeric_limits<hash_value_type>::max(), rhs_index_type{JoinNoneValue}}},
         comparator_adapter,
         distinct_hash_join::probing_scheme_type{},
         cuco::thread_scope_device,
@@ -189,7 +189,7 @@ distinct_hash_join<HasNested>::distinct_hash_join(cudf::table_view const& build,
     [&](auto&& hasher, auto&& hash_table) {
       auto const iter = cudf::detail::make_counting_transform_iterator(
         0,
-        build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, lhs_index_type>{hasher});
+        build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, rhs_index_type>{hasher});
 
       size_type const build_table_num_rows{build.num_rows()};
       if (this->_nulls_equal == cudf::null_equality::EQUAL or (not cudf::nullable(this->_build))) {
@@ -251,7 +251,7 @@ distinct_hash_join<HasNested>::inner_join(rmm::cuda_stream_view stream,
     [&](auto&& hasher, auto&& hash_table) {
       auto const iter = cudf::detail::make_counting_transform_iterator(
         0,
-        build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, rhs_index_type>{hasher});
+        build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, lhs_index_type>{hasher});
 
       auto const [probe_indices_end, _] = hash_table.retrieve(iter,
                                                               iter + probe_table_num_rows,
@@ -304,7 +304,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> distinct_hash_join<HasNested>::l
       [&](auto&& hasher, auto&& hash_table) {
         auto const iter = cudf::detail::make_counting_transform_iterator(
           0,
-          build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, rhs_index_type>{
+          build_keys_fn<typename std::remove_reference_t<decltype(hasher)>, lhs_index_type>{
             hasher});
 
         auto const output_begin =
