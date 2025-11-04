@@ -751,6 +751,7 @@ add_library(
   src/strings/copying/copying.cu
   src/strings/copying/copy_range.cu
   src/strings/copying/shift.cu
+  src/strings/copying/gather.cu
   src/strings/count_matches.cu
   src/strings/extract/extract.cu
   src/strings/extract/extract_all.cu

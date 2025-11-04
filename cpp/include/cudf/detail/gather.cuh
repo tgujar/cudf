@@ -27,8 +27,8 @@
 #include <cudf/dictionary/dictionary_factories.hpp>
 #include <cudf/lists/detail/gather.cuh>
 #include <cudf/lists/lists_column_view.hpp>
-#include <cudf/strings/detail/gather.cuh>
 #include <cudf/structs/structs_column_view.hpp>
+#include <cudf/strings/detail/gather.cuh>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_device_view.cuh>
 #include <cudf/types.hpp>
