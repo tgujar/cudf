@@ -10,6 +10,7 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
@@ -22,7 +23,7 @@
 
 namespace cudf::detail {
 
-enum class fixed_width_metadata_layout { packed32, unpacked32, generic };
+constexpr size_type fixed_width_partition_block_size = 1024;
 
 using fixed_width_partition_result = std::pair<std::unique_ptr<table>, std::vector<size_type>>;
 
@@ -37,18 +38,14 @@ inline int fixed_width_required_bits(std::uint64_t count) noexcept
   return bits;
 }
 
-inline fixed_width_metadata_layout select_fixed_width_metadata_layout(
-  size_type num_partitions,
-  size_type packed_rows_per_thread,
-  size_type unpacked_rows_per_thread) noexcept
+inline bool packed_metadata_fits(size_type num_partitions, size_type rows_per_thread) noexcept
 {
   auto const partition_bits = fixed_width_required_bits(static_cast<std::uint64_t>(num_partitions));
-  auto const packed_fits =
-    packed_rows_per_thread > 0 &&
-    partition_bits + fixed_width_required_bits(1024ULL * packed_rows_per_thread) <= 32;
-  if (packed_fits) { return fixed_width_metadata_layout::packed32; }
-  return unpacked_rows_per_thread > 0 ? fixed_width_metadata_layout::unpacked32
-                                      : fixed_width_metadata_layout::generic;
+  return rows_per_thread > 0 &&
+         partition_bits +
+             fixed_width_required_bits(
+               static_cast<std::uint64_t>(fixed_width_partition_block_size) * rows_per_thread) <=
+           32;
 }
 
 /**

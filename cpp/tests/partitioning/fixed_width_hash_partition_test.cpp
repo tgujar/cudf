@@ -91,16 +91,13 @@ void expect_murmur_partitioned(cudf::table_view const& input,
   }
 }
 
-TEST_F(FixedWidthHashPartitionTest, MetadataLayoutBoundaries)
+TEST_F(FixedWidthHashPartitionTest, PackedMetadataBoundaries)
 {
-  using layout = cudf::detail::fixed_width_metadata_layout;
-
   // 20 partition bits plus 12 bits for a 4 * 1024-row CTA exactly fills packed32.
-  EXPECT_EQ(cudf::detail::select_fixed_width_metadata_layout(1 << 20, 4, 1), layout::packed32);
+  EXPECT_TRUE(cudf::detail::packed_metadata_fits(1 << 20, 4));
   // Five rows per thread need 13 offset bits, so the optimized unpacked layout is selected.
-  EXPECT_EQ(cudf::detail::select_fixed_width_metadata_layout(1 << 20, 5, 1), layout::unpacked32);
-  EXPECT_EQ(cudf::detail::select_fixed_width_metadata_layout(1 << 20, 5, 0), layout::generic);
-  EXPECT_EQ(cudf::detail::select_fixed_width_metadata_layout(1, 1, 0), layout::packed32);
+  EXPECT_FALSE(cudf::detail::packed_metadata_fits(1 << 20, 5));
+  EXPECT_TRUE(cudf::detail::packed_metadata_fits(1, 1));
 }
 
 TEST_F(FixedWidthHashPartitionTest, FixedPointCompositeKeys)

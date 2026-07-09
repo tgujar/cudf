@@ -10,6 +10,7 @@
 #include <cudf/detail/gather.hpp>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/detail/utilities/cuda.cuh>
+#include <cudf/detail/utilities/cuda_memcpy.hpp>
 #include <cudf/detail/utilities/host_vector.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/hashing/detail/hashing.hpp>
@@ -40,7 +41,7 @@ namespace {
 
 namespace cg = cooperative_groups;
 
-constexpr size_type block_size             = 1024;
+constexpr size_type block_size             = fixed_width_partition_block_size;
 constexpr std::size_t async_copy_alignment = 16;
 static_assert(block_size % cudf::detail::warp_size == 0);
 
@@ -61,7 +62,7 @@ struct dispatch_fixed_width_type {
 template <typename HashValue>
 class bitwise_partitioner {
  public:
-  __host__ __device__ explicit bitwise_partitioner(size_type count) : _mask{count - 1} {}
+  CUDF_HOST_DEVICE explicit bitwise_partitioner(size_type count) : _mask{count - 1} {}
   __device__ size_type operator()(HashValue value) const { return value & _mask; }
 
  private:
@@ -71,14 +72,14 @@ class bitwise_partitioner {
 template <typename HashValue>
 class modulo_partitioner {
  public:
-  __host__ __device__ explicit modulo_partitioner(size_type count) : _divisor{count} {}
+  CUDF_HOST_DEVICE explicit modulo_partitioner(size_type count) : _divisor{count} {}
   __device__ size_type operator()(HashValue value) const { return value % _divisor; }
 
  private:
   size_type _divisor;
 };
 
-__host__ __device__ constexpr std::size_t round_up(std::size_t value, std::size_t alignment)
+CUDF_HOST_DEVICE constexpr std::size_t round_up(std::size_t value, std::size_t alignment)
 {
   return (value + alignment - 1) / alignment * alignment;
 }
@@ -87,7 +88,7 @@ template <typename Key>
 struct identity_hash {
   using result_type = uint32_t;
 
-  __host__ __device__ constexpr explicit identity_hash(uint32_t = 0) {}
+  CUDF_HOST_DEVICE constexpr explicit identity_hash(uint32_t = 0) {}
 
   template <typename Return = result_type>
   __device__ constexpr Return operator()(Key const& key) const
@@ -672,7 +673,6 @@ std::size_t histogram_shared_memory_size(size_type num_partitions)
   return static_cast<std::size_t>(num_partitions) * sizeof(size_type);
 }
 
-template <metadata_kind Kind>
 std::size_t copy_shared_memory_size(size_type num_partitions,
                                     size_type rows_per_thread,
                                     std::size_t max_fixed_width_size)
@@ -750,9 +750,9 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
                                                                std::size_t max_fixed_width_size,
                                                                bool has_fixed_width_payload)
 {
-  auto const histogram_kernel = &materialize_metadata_kernel<Hash, HasNulls, Partitioner, Kind>;
-  auto const histogram_bytes  = histogram_shared_memory_size(num_partitions);
-  if (active_blocks_per_multiprocessor(histogram_kernel, histogram_bytes) <= 0) {
+  auto const metadata_kernel = &materialize_metadata_kernel<Hash, HasNulls, Partitioner, Kind>;
+  auto const histogram_bytes = histogram_shared_memory_size(num_partitions);
+  if (active_blocks_per_multiprocessor(metadata_kernel, histogram_bytes) <= 0) {
     return std::nullopt;
   }
 
@@ -761,7 +761,7 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
   constexpr size_type direct_hash_rows_per_thread = 8;
   if (!has_fixed_width_payload) {
     return make_full_wave_launch_config(
-      num_rows, direct_hash_rows_per_thread, histogram_kernel, [histogram_bytes](size_type) {
+      num_rows, direct_hash_rows_per_thread, metadata_kernel, [histogram_bytes](size_type) {
         return histogram_bytes;
       });
   }
@@ -769,7 +769,7 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
   auto const copy_kernel               = &fused_fixed_width_copy_kernel<Kind>;
   auto const copy_shared_memory_budget = dynamic_shared_memory_budget(copy_kernel);
   auto const fixed_copy_shared_memory_bytes =
-    copy_shared_memory_size<Kind>(num_partitions, 0, max_fixed_width_size);
+    copy_shared_memory_size(num_partitions, 0, max_fixed_width_size);
   if (fixed_copy_shared_memory_bytes >= copy_shared_memory_budget) { return std::nullopt; }
 
   auto const copy_shared_memory_per_iteration =
@@ -778,8 +778,8 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
     static_cast<size_type>((copy_shared_memory_budget - fixed_copy_shared_memory_bytes) /
                            copy_shared_memory_per_iteration);
   while (candidate_rows_per_thread > 0) {
-    auto const candidate_copy_shared_memory_bytes = copy_shared_memory_size<Kind>(
-      num_partitions, candidate_rows_per_thread, max_fixed_width_size);
+    auto const candidate_copy_shared_memory_bytes =
+      copy_shared_memory_size(num_partitions, candidate_rows_per_thread, max_fixed_width_size);
     if (candidate_copy_shared_memory_bytes <= copy_shared_memory_budget &&
         active_blocks_per_multiprocessor(copy_kernel, candidate_copy_shared_memory_bytes) > 0) {
       break;
@@ -791,7 +791,7 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
                                       candidate_rows_per_thread,
                                       copy_kernel,
                                       [num_partitions, max_fixed_width_size](size_type rows) {
-                                        return copy_shared_memory_size<Kind>(
+                                        return copy_shared_memory_size(
                                           num_partitions, rows, max_fixed_width_size);
                                       });
 }
@@ -813,12 +813,12 @@ fixed_width_partition_result execute_fixed_width_partition(
   cudf::scoped_range range{Kind == metadata_kind::packed32 ? "hash_partition_fixed_width_packed"
                                                            : "hash_partition_fixed_width_unpacked"};
 
-  auto const num_rows        = input.num_rows();
-  auto const rows_per_thread = launch_config.rows_per_thread;
-  auto const grid_size       = launch_config.grid_size;
-  auto const metadata_count  = static_cast<std::size_t>(num_rows);
-  auto const block_count     = static_cast<std::size_t>(grid_size) * num_partitions;
-  auto const current_mr      = cudf::get_current_device_resource_ref();
+  auto const num_rows              = input.num_rows();
+  auto const rows_per_thread       = launch_config.rows_per_thread;
+  auto const grid_size             = launch_config.grid_size;
+  auto const metadata_count        = static_cast<std::size_t>(num_rows);
+  auto const block_partition_count = static_cast<std::size_t>(grid_size) * num_partitions;
+  auto const current_mr            = cudf::get_current_device_resource_ref();
   auto const partition_bits = fixed_width_required_bits(static_cast<std::uint64_t>(num_partitions));
 
   rmm::device_uvector<uint32_t> packed_metadata(
@@ -835,8 +835,9 @@ fixed_width_partition_result execute_fixed_width_partition(
     }
   }();
 
-  rmm::device_uvector<size_type> block_partition_sizes(block_count, stream, current_mr);
-  rmm::device_uvector<size_type> scanned_block_partition_sizes(block_count, stream, current_mr);
+  rmm::device_uvector<size_type> block_partition_sizes(block_partition_count, stream, current_mr);
+  rmm::device_uvector<size_type> scanned_block_partition_sizes(
+    block_partition_count, stream, current_mr);
 
   auto key_device_view = table_device_view::create(keys, stream);
 
@@ -850,10 +851,10 @@ fixed_width_partition_result execute_fixed_width_partition(
     {cudf::get_pinned_memory_resource(), stream});
   host_column_descriptors.reserve(fixed_width_indices.size());
 
-  auto const histogram_shared_memory_bytes = histogram_shared_memory_size(num_partitions);
-  auto const histogram_kernel = &materialize_metadata_kernel<Hash, HasNulls, Partitioner, Kind>;
-  configure_dynamic_shared_memory(histogram_kernel);
-  histogram_kernel<<<grid_size, block_size, histogram_shared_memory_bytes, stream.value()>>>(
+  auto const metadata_shared_memory_bytes = histogram_shared_memory_size(num_partitions);
+  auto const metadata_kernel = &materialize_metadata_kernel<Hash, HasNulls, Partitioner, Kind>;
+  configure_dynamic_shared_memory(metadata_kernel);
+  metadata_kernel<<<grid_size, block_size, metadata_shared_memory_bytes, stream.value()>>>(
     *key_device_view,
     num_rows,
     num_partitions,
@@ -895,15 +896,11 @@ fixed_width_partition_result execute_fixed_width_partition(
   if (!fixed_width_indices.empty()) {
     rmm::device_uvector<fixed_width_column_descriptor> column_descriptors(
       host_column_descriptors.size(), stream, current_mr);
-    CUDF_CUDA_TRY(
-      cudaMemcpyAsync(column_descriptors.data(),
-                      host_column_descriptors.data(),
-                      host_column_descriptors.size() * sizeof(fixed_width_column_descriptor),
-                      cudaMemcpyHostToDevice,
-                      stream.value()));
+    cudf::detail::cuda_memcpy_async<fixed_width_column_descriptor>(
+      column_descriptors, host_column_descriptors, stream);
 
     auto const copy_shared_memory_bytes =
-      copy_shared_memory_size<Kind>(num_partitions, rows_per_thread, max_fixed_width_size);
+      copy_shared_memory_size(num_partitions, rows_per_thread, max_fixed_width_size);
     auto const average_rows_per_partition = std::max<size_type>(
       1, cudf::util::div_rounding_up_safe(block_size * rows_per_thread, num_partitions));
     size_type flush_tile_size = 1;
@@ -928,9 +925,9 @@ fixed_width_partition_result execute_fixed_width_partition(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
-  auto const fixed_width_input           = input.select(fixed_width_indices);
-  auto const fixed_width_input_has_nulls = nullable(fixed_width_input);
-  auto const needs_gather_map = !non_fixed_width_indices.empty() || fixed_width_input_has_nulls;
+  auto const fixed_width_input       = input.select(fixed_width_indices);
+  auto const fixed_width_is_nullable = nullable(fixed_width_input);
+  auto const needs_gather_map        = !non_fixed_width_indices.empty() || fixed_width_is_nullable;
   std::optional<rmm::device_uvector<size_type>> gather_map;
   if (needs_gather_map) {
     gather_map.emplace(num_rows, stream, current_mr);
@@ -943,7 +940,7 @@ fixed_width_partition_result execute_fixed_width_partition(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
-  if (fixed_width_input_has_nulls) {
+  if (fixed_width_is_nullable) {
     detail::gather_bitmask(fixed_width_input,
                            gather_map->begin(),
                            fixed_width_outputs,
@@ -1007,9 +1004,7 @@ std::optional<fixed_width_partition_result> try_partitioner(table_view const& in
   auto const packed_config =
     compute_launch_config<Hash, HasNulls, Partitioner, metadata_kind::packed32>(
       num_rows, num_partitions, max_fixed_width_size, has_fixed_width_payload);
-  if (packed_config &&
-      select_fixed_width_metadata_layout(num_partitions, packed_config->rows_per_thread, 0) ==
-        fixed_width_metadata_layout::packed32) {
+  if (packed_config && packed_metadata_fits(num_partitions, packed_config->rows_per_thread)) {
     return execute_fixed_width_partition<Hash, HasNulls, Partitioner, metadata_kind::packed32>(
       input,
       keys,

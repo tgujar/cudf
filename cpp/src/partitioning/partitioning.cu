@@ -18,8 +18,6 @@
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/hashing/detail/murmurhash3_x86_32.cuh>
 #include <cudf/partitioning.hpp>
-#include <cudf/table/table_device_view.cuh>
-#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -887,11 +885,6 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> hash_partition(
     return std::pair{empty_like(input), std::vector<size_type>(num_partitions + 1, 0)};
   }
 
-  if constexpr (std::is_same_v<hash_function<void>, cudf::detail::IdentityHash<void>>) {
-    for (auto const& c : table_to_hash) {
-      CUDF_EXPECTS(is_numeric(c.type()), "IdentityHash does not support this data type");
-    }
-  }
   if (has_nested_nulls(table_to_hash)) {
     return hash_partition_table<hash_function, true>(
       input, table_to_hash, num_partitions, seed, stream, mr);
@@ -944,9 +937,9 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> hash_partition(
 
     if (is_fixed_width_partition_compatible(keys)) {
       try {
-        auto result = try_fixed_width_hash_partition(
+        auto fixed_width_result = try_fixed_width_hash_partition(
           input, keys, num_partitions, hash_function, seed, stream, mr);
-        if (result.has_value()) { return std::move(*result); }
+        if (fixed_width_result) { return std::move(*fixed_width_result); }
       } catch (std::bad_alloc const&) {
         // The generic implementation has a different temporary-memory profile and may still fit.
       }
