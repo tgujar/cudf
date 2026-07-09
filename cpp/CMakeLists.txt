@@ -918,6 +918,7 @@ add_library(
   src/lists/stream_compaction/distinct.cu
   src/lists/utilities.cu
   src/merge/merge.cu
+  src/partitioning/fixed_width.cu
   src/partitioning/partitioning.cu
   src/partitioning/round_robin.cu
   src/quantiles/tdigest/tdigest.cu

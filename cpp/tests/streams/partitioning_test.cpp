@@ -1,11 +1,12 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2024-2025, NVIDIA CORPORATION.
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <cudf_test/base_fixture.hpp>
 #include <cudf_test/column_wrapper.hpp>
 #include <cudf_test/default_stream.hpp>
+#include <cudf_test/table_utilities.hpp>
 #include <cudf_test/testing_main.hpp>
 #include <cudf_test/type_lists.hpp>
 
@@ -60,6 +61,23 @@ TEST_F(PartitionTest, ZeroPartitions)
                                                 cudf::hash_id::HASH_MURMUR3,
                                                 cudf::DEFAULT_HASH_SEED,
                                                 cudf::test::get_default_stream());
+}
+
+TEST_F(PartitionTest, HashPartitionFixedWidthNonDefaultStream)
+{
+  fixed_width_column_wrapper<int32_t> keys{9, 2, 7, 4, 1, 8, 3, 6, 5};
+  cudf::test::fixed_point_column_wrapper<__int128_t> payload({90, 20, 70, 40, 10, 80, 30, 60, 50},
+                                                             numeric::scale_type{-2});
+  auto const input = cudf::table_view{{keys, payload}};
+
+  auto [output, offsets] = cudf::hash_partition(
+    input, {0}, 5, cudf::hash_id::HASH_MURMUR3, 12345, cudf::test::get_default_stream());
+  auto const sorted_input  = cudf::sort(input, {}, {}, cudf::test::get_default_stream());
+  auto const sorted_output = cudf::sort(output->view(), {}, {}, cudf::test::get_default_stream());
+
+  CUDF_TEST_EXPECT_TABLES_EQUAL(sorted_input->view(), sorted_output->view());
+  EXPECT_EQ(offsets.front(), 0);
+  EXPECT_EQ(offsets.back(), input.num_rows());
 }
 
 CUDF_TEST_PROGRAM_MAIN()

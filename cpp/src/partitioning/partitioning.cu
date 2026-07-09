@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "fixed_width.cuh"
+
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/gather.cuh>
@@ -32,6 +34,7 @@
 #include <thrust/scan.h>
 #include <thrust/transform.h>
 
+#include <new>
 #include <stdexcept>
 
 namespace cudf {
@@ -932,6 +935,24 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> hash_partition(
     keys.num_columns() == 0 || input.num_rows() == keys.num_rows(),
     "Input table and key table must have same number of rows, or key table should have no columns.",
     std::invalid_argument);
+  if (num_partitions > 0 && input.num_rows() > 0 && keys.num_columns() > 0) {
+    if (hash_function == hash_id::HASH_IDENTITY) {
+      for (auto const& column : keys) {
+        CUDF_EXPECTS(is_numeric(column.type()), "IdentityHash does not support this data type");
+      }
+    }
+
+    if (is_fixed_width_partition_compatible(keys)) {
+      try {
+        auto result = try_fixed_width_hash_partition(
+          input, keys, num_partitions, hash_function, seed, stream, mr);
+        if (result.has_value()) { return std::move(*result); }
+      } catch (std::bad_alloc const&) {
+        // The generic implementation has a different temporary-memory profile and may still fit.
+      }
+    }
+  }
+
   switch (hash_function) {
     case (hash_id::HASH_IDENTITY):
       return hash_partition<detail::IdentityHash>(input, keys, num_partitions, seed, stream, mr);
