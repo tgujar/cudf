@@ -34,7 +34,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace cudf::detail {
 namespace {
@@ -684,64 +687,87 @@ std::size_t copy_shared_memory_size(size_type num_partitions,
   return payload + metadata + offsets;
 }
 
-template <typename Kernel, typename SharedMemorySize>
-std::optional<fixed_width_launch_config> make_full_wave_launch_config(
-  size_type num_rows,
-  size_type maximum_rows_per_thread,
-  Kernel scheduling_kernel,
-  SharedMemorySize shared_memory_size)
+struct fixed_width_copy_batch {
+  size_type column_offset;
+  size_type column_count;
+  size_type max_column_width;
+  std::size_t shared_memory_size;
+};
+
+// Limit each batch to the estimated L2 working set of the concurrently resident CTAs. Keeping the
+// input and partitioned output sectors in L2 reduces write amplification for wide tables.
+template <metadata_kind Kind, typename Descriptors>
+std::vector<fixed_width_copy_batch> make_copy_batches(Descriptors const& descriptors,
+                                                      size_type grid_size,
+                                                      size_type rows_per_thread,
+                                                      size_type num_partitions)
 {
-  if (maximum_rows_per_thread <= 0) { return std::nullopt; }
+  if (descriptors.empty()) { return {}; }
 
   int device{};
   CUDF_CUDA_TRY(cudaGetDevice(&device));
   cudaDeviceProp properties{};
   CUDF_CUDA_TRY(cudaGetDeviceProperties(&properties, device));
+  auto const l2_capacity = static_cast<std::uint64_t>(std::max(properties.l2CacheSize, 0));
 
-  auto const row_blocks = cudf::util::div_rounding_up_safe(static_cast<std::uint64_t>(num_rows),
-                                                           static_cast<std::uint64_t>(block_size));
-  auto rows_per_thread  = maximum_rows_per_thread;
+  constexpr std::uint64_t sector_size = 32;
+  auto const rows_per_block =
+    static_cast<std::uint64_t>(block_size) * static_cast<std::uint64_t>(rows_per_thread);
+  auto const partition_runs =
+    std::min<std::uint64_t>(static_cast<std::uint64_t>(num_partitions), rows_per_block);
+  constexpr std::uint64_t metadata_arrays =
+    Kind == metadata_kind::packed32 ? std::uint64_t{1} : std::uint64_t{2};
+  auto const copy_kernel = &fused_fixed_width_copy_kernel<Kind>;
 
-  // Wave rounding can reduce the rows each CTA actually needs. Re-query occupancy at the
-  // reduced shared-memory footprint because that can increase the number of resident CTAs.
-  while (rows_per_thread > 0) {
-    auto const dynamic_shared_memory = shared_memory_size(rows_per_thread);
+  auto batch_footprint = [&](std::uint64_t column_footprint, size_type max_column_width) {
+    auto const shared_memory =
+      copy_shared_memory_size(num_partitions, rows_per_thread, max_column_width);
+    auto const blocks_per_sm = active_blocks_per_multiprocessor(copy_kernel, shared_memory);
+    if (blocks_per_sm <= 0) { return std::numeric_limits<std::uint64_t>::max(); }
+
     auto const resident_blocks =
-      active_blocks_per_multiprocessor(scheduling_kernel, dynamic_shared_memory);
-    if (resident_blocks <= 0) { return std::nullopt; }
+      std::min<std::uint64_t>(static_cast<std::uint64_t>(grid_size),
+                              static_cast<std::uint64_t>(blocks_per_sm) *
+                                static_cast<std::uint64_t>(properties.multiProcessorCount));
 
-    auto const wave_blocks = static_cast<std::uint64_t>(resident_blocks) *
-                             static_cast<std::uint64_t>(properties.multiProcessorCount);
-    if (wave_blocks == 0) { return std::nullopt; }
+    // Metadata is contiguous. Block counts and global partition offsets can each touch one sector
+    // per partition and resident CTA.
+    auto const routing_footprint =
+      metadata_arrays * (rows_per_block * sizeof(std::uint32_t) +
+                         static_cast<std::uint64_t>(rows_per_thread) * (sector_size - 1)) +
+      2 * static_cast<std::uint64_t>(num_partitions) * sector_size;
+    return resident_blocks * (routing_footprint + column_footprint);
+  };
 
-    // A partial wave is unavoidable when there are fewer nonempty row blocks than resident CTAs.
-    // Do not manufacture empty CTAs for those small inputs.
-    if (row_blocks < wave_blocks) {
-      if (row_blocks > static_cast<std::uint64_t>(properties.maxGridSize[0])) {
-        return std::nullopt;
-      }
-      return fixed_width_launch_config{1, static_cast<size_type>(row_blocks)};
+  std::vector<fixed_width_copy_batch> batches;
+  auto column_offset = size_type{0};
+  while (column_offset < static_cast<size_type>(descriptors.size())) {
+    auto column_count     = size_type{0};
+    auto max_column_width = size_type{0};
+    auto column_footprint = std::uint64_t{0};
+    while (column_offset + column_count < static_cast<size_type>(descriptors.size())) {
+      auto const width =
+        static_cast<std::uint64_t>(descriptors[column_offset + column_count].width);
+      auto const input_footprint =
+        rows_per_block * width + static_cast<std::uint64_t>(rows_per_thread) * (sector_size - 1);
+      auto const output_footprint = rows_per_block * width + partition_runs * (sector_size - 1);
+      auto const candidate_column_footprint = column_footprint + input_footprint + output_footprint;
+      auto const candidate_max_width = std::max(max_column_width, static_cast<size_type>(width));
+      auto const candidate_footprint =
+        batch_footprint(candidate_column_footprint, candidate_max_width);
+      if (column_count > 0 && candidate_footprint > l2_capacity) { break; }
+      ++column_count;
+      max_column_width = candidate_max_width;
+      column_footprint = candidate_column_footprint;
     }
 
-    auto const minimum_grid =
-      cudf::util::div_rounding_up_safe(row_blocks, static_cast<std::uint64_t>(rows_per_thread));
-    auto const waves = cudf::util::div_rounding_up_safe(minimum_grid, wave_blocks);
-    auto const grid  = waves * wave_blocks;
-    if (grid > static_cast<std::uint64_t>(properties.maxGridSize[0]) ||
-        grid > static_cast<std::uint64_t>(std::numeric_limits<size_type>::max())) {
-      return std::nullopt;
-    }
-
-    auto const required_rows =
-      cudf::util::div_rounding_up_safe(row_blocks, static_cast<std::uint64_t>(grid));
-    if (required_rows == static_cast<std::uint64_t>(rows_per_thread)) {
-      return fixed_width_launch_config{rows_per_thread, static_cast<size_type>(grid)};
-    }
-
-    // grid >= ceil(row_blocks / rows_per_thread), so this iteration is monotonic.
-    rows_per_thread = static_cast<size_type>(required_rows);
+    batches.push_back({column_offset,
+                       column_count,
+                       max_column_width,
+                       copy_shared_memory_size(num_partitions, rows_per_thread, max_column_width)});
+    column_offset += column_count;
   }
-  return std::nullopt;
+  return batches;
 }
 
 template <template <typename> class Hash, bool HasNulls, typename Partitioner, metadata_kind Kind>
@@ -756,15 +782,18 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
     return std::nullopt;
   }
 
+  auto const make_launch_config = [num_rows](size_type rows_per_thread) {
+    auto const rows_per_block =
+      static_cast<std::uint64_t>(block_size) * static_cast<std::uint64_t>(rows_per_thread);
+    auto const grid_size =
+      cudf::util::div_rounding_up_safe(static_cast<std::uint64_t>(num_rows), rows_per_block);
+    return fixed_width_launch_config{rows_per_thread, static_cast<size_type>(grid_size)};
+  };
+
   // With no fused payload copy, hashing has no per-row shared-memory requirement. Match the
-  // original optimized partitioner schedule as the upper bound, then round it to full waves.
+  // original optimized partitioner schedule.
   constexpr size_type direct_hash_rows_per_thread = 8;
-  if (!has_fixed_width_payload) {
-    return make_full_wave_launch_config(
-      num_rows, direct_hash_rows_per_thread, metadata_kernel, [histogram_bytes](size_type) {
-        return histogram_bytes;
-      });
-  }
+  if (!has_fixed_width_payload) { return make_launch_config(direct_hash_rows_per_thread); }
 
   auto const copy_kernel               = &fused_fixed_width_copy_kernel<Kind>;
   auto const copy_shared_memory_budget = dynamic_shared_memory_budget(copy_kernel);
@@ -787,13 +816,8 @@ std::optional<fixed_width_launch_config> compute_launch_config(size_type num_row
     --candidate_rows_per_thread;
   }
 
-  return make_full_wave_launch_config(num_rows,
-                                      candidate_rows_per_thread,
-                                      copy_kernel,
-                                      [num_partitions, max_fixed_width_size](size_type rows) {
-                                        return copy_shared_memory_size(
-                                          num_partitions, rows, max_fixed_width_size);
-                                      });
+  if (candidate_rows_per_thread <= 0) { return std::nullopt; }
+  return make_launch_config(candidate_rows_per_thread);
 }
 
 template <template <typename> class Hash, bool HasNulls, typename Partitioner, metadata_kind Kind>
@@ -806,7 +830,6 @@ fixed_width_partition_result execute_fixed_width_partition(
   fixed_width_launch_config launch_config,
   std::vector<size_type> const& fixed_width_indices,
   std::vector<size_type> const& non_fixed_width_indices,
-  std::size_t max_fixed_width_size,
   rmm::cuda_stream_view stream,
   rmm::device_async_resource_ref mr)
 {
@@ -899,8 +922,6 @@ fixed_width_partition_result execute_fixed_width_partition(
     cudf::detail::cuda_memcpy_async<fixed_width_column_descriptor>(
       column_descriptors, host_column_descriptors, stream);
 
-    auto const copy_shared_memory_bytes =
-      copy_shared_memory_size(num_partitions, rows_per_thread, max_fixed_width_size);
     auto const average_rows_per_partition = std::max<size_type>(
       1, cudf::util::div_rounding_up_safe(block_size * rows_per_thread, num_partitions));
     size_type flush_tile_size = 1;
@@ -911,18 +932,22 @@ fixed_width_partition_result execute_fixed_width_partition(
 
     auto const copy_kernel = &fused_fixed_width_copy_kernel<Kind>;
     configure_dynamic_shared_memory(copy_kernel);
-    copy_kernel<<<grid_size, block_size, copy_shared_memory_bytes, stream.value()>>>(
-      column_descriptors.data(),
-      static_cast<size_type>(column_descriptors.size()),
-      num_rows,
-      num_partitions,
-      rows_per_thread,
-      static_cast<size_type>(max_fixed_width_size),
-      metadata,
-      block_partition_sizes.data(),
-      scanned_block_partition_sizes.data(),
-      flush_tile_size);
-    CUDF_CUDA_TRY(cudaGetLastError());
+    auto const batches =
+      make_copy_batches<Kind>(host_column_descriptors, grid_size, rows_per_thread, num_partitions);
+    for (auto const& batch : batches) {
+      copy_kernel<<<grid_size, block_size, batch.shared_memory_size, stream.value()>>>(
+        column_descriptors.data() + batch.column_offset,
+        batch.column_count,
+        num_rows,
+        num_partitions,
+        rows_per_thread,
+        batch.max_column_width,
+        metadata,
+        block_partition_sizes.data(),
+        scanned_block_partition_sizes.data(),
+        flush_tile_size);
+      CUDF_CUDA_TRY(cudaGetLastError());
+    }
   }
 
   auto const fixed_width_input       = input.select(fixed_width_indices);
@@ -1014,7 +1039,6 @@ std::optional<fixed_width_partition_result> try_partitioner(table_view const& in
       *packed_config,
       fixed_width_indices,
       non_fixed_width_indices,
-      max_fixed_width_size,
       stream,
       mr);
   }
@@ -1033,7 +1057,6 @@ std::optional<fixed_width_partition_result> try_partitioner(table_view const& in
     *unpacked_config,
     fixed_width_indices,
     non_fixed_width_indices,
-    max_fixed_width_size,
     stream,
     mr);
 }

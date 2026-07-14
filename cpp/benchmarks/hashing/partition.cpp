@@ -12,7 +12,6 @@
 
 #include <nvbench/nvbench.cuh>
 
-#include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <optional>
@@ -142,10 +141,22 @@ void bench_hybrid_payload(nvbench::state& state)
   run_partition(state, input, {0}, num_partitions);
 }
 
+void bench_equal_payload_column_count(nvbench::state& state)
+{
+  // Keep the fixed-width payload at 4 GiB while varying the column count. This isolates the copy
+  // kernel's column batching from total payload size and hashes only one column.
+  constexpr std::int64_t num_values = std::int64_t{1} << 29;
+  auto const num_cols               = static_cast<cudf::size_type>(state.get_int64("num_cols"));
+  auto const num_rows               = static_cast<cudf::size_type>(num_values / num_cols);
+  auto input =
+    create_sequence_table(cycle_dtypes({cudf::type_id::INT64}, num_cols), row_count{num_rows});
+  run_partition(state, input, {0}, 1024);
+}
+
 NVBENCH_BENCH(bench_partition_count_latency)
   .set_name("hash_partition_partition_count_latency")
   .add_int64_axis("num_partitions",
-                  {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384});
+                  {2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384});
 
 NVBENCH_BENCH(bench_fixed_width_families)
   .set_name("hash_partition_fixed_width_families")
@@ -167,5 +178,9 @@ NVBENCH_BENCH(bench_fixed_width_families)
 NVBENCH_BENCH(bench_hybrid_payload)
   .set_name("hash_partition_hybrid_payload")
   .add_int64_axis("num_partitions", {8, 64, 1024, 4096});
+
+NVBENCH_BENCH(bench_equal_payload_column_count)
+  .set_name("hash_partition_equal_payload_column_count")
+  .add_int64_axis("num_cols", {8, 256});
 
 }  // namespace
