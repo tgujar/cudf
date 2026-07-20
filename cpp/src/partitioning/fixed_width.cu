@@ -922,13 +922,7 @@ fixed_width_partition_result execute_fixed_width_partition(
     cudf::detail::cuda_memcpy_async<fixed_width_column_descriptor>(
       column_descriptors, host_column_descriptors, stream);
 
-    auto const average_rows_per_partition = std::max<size_type>(
-      1, cudf::util::div_rounding_up_safe(block_size * rows_per_thread, num_partitions));
-    size_type flush_tile_size = 1;
-    while (flush_tile_size < average_rows_per_partition &&
-           flush_tile_size < cudf::detail::warp_size) {
-      flush_tile_size <<= 1;
-    }
+    constexpr size_type flush_tile_size = cudf::detail::warp_size;
 
     auto const copy_kernel = &fused_fixed_width_copy_kernel<Kind>;
     configure_dynamic_shared_memory(copy_kernel);
